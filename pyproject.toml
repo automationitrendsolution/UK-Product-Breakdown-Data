@@ -1,0 +1,24 @@
+[project]
+name = "sellerboard-uk-breakdown-cron"
+version = "1.0.0"
+description = "Sellerboard 'Dashboard by product' export -> local MySQL staging -> powerbidb.Uk_breakdown_data"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "playwright>=1.64.0",
+    "pymysql>=1.2.3",
+    "python-dotenv>=1.2.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -p no:cacheprovider"  # no .pytest_cache folder; run tests with `python -B` for no __pycache__
+markers = ["integration: needs the sellerboard-mysql container (skipped when it is not reachable)"]

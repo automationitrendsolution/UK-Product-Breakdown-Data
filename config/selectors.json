@@ -1,0 +1,20 @@
+{
+  "_help": "Reports > Dashboard by product for the Uk-AMZ account, Excel, with the detailed breakdown. Recorded from the live page on 2026-10-20. Values may use {start:%d/%m/%Y}, {end:%d/%m/%Y}, {start_ts}, {end_ts} (UTC-midnight timestamps). Never press Enter in the date boxes: it submits the form with the old dates.",
+  "verified": true,
+  "account": "Uk-AMZ",
+  "account_opener": "a[data-accountfilter-opener]",
+  "dashboard_url": "https://app.sellerboard.com/en/dashboard",
+  "reports_url": "https://app.sellerboard.com/en/export",
+  "download_timeout_seconds": 300,
+  "export_steps": [
+    {"action": "click", "selector": "text=\"Dashboard by product\""},
+    {"action": "fill", "selector": "input[name=daterangepicker_start]", "value": "{start:%d/%m/%Y}"},
+    {"action": "fill", "selector": "input[name=daterangepicker_end]", "value": "{end:%d/%m/%Y}"},
+    {"action": "click", "selector": "text=\"Select the file format\""},
+    {"action": "expect_checked", "selector": "#exportFormatXlsx"},
+    {"action": "check", "selector": "#with_details", "click": "text=Show detailed breakdown of Amazon fees, refund costs and COGS"},
+    {"action": "expect_value", "selector": "#period_from", "value": "{start_ts}"},
+    {"action": "expect_value", "selector": "#period_to", "value": "{end_ts}"}
+  ],
+  "download_step": {"action": "click", "selector": "button[type=submit]:has-text(\"Download\")"}
+}

@@ -1,0 +1,6 @@
+# Sellerboard UK breakdown -> Power BI: 13:00 every 3 days (server time).
+# Install with `crontab -e`. Use absolute paths: cron's PATH is minimal (`which uv` shows uv's path).
+# Day-of-month */3 fires on the 1st, 4th, ... 31st; the 3-day window plus catch-up covers every day.
+# Each run appends one summary line to logs/cron.log; details go to logs/importer.log.
+MAILTO=""
+0 13 */3 * * cd /data/cron/sellerboard-uk-breakdown-cron && /root/.local/bin/uv run --no-sync python run.py --quiet >> logs/cron-output.log 2>&1

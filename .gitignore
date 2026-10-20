@@ -1,0 +1,30 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Database dumps and backups
+*.sql.gz
+*.dump
+*.bak
+dumps/
+backups/
+
+# Business data and generated output
+data/*/*
+!data/*/.gitkeep
+*.xlsx
+*.xls
+*.csv
+logs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Sellerboard browser session lives in data/browser/ (cookies = account access)
