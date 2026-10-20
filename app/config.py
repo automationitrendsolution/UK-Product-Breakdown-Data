@@ -137,7 +137,9 @@ def _db_config(label: str, prefix: str, defaults: dict[str, str]) -> DbConfig:
     values = {key: _env(prefix + key, defaults.get(key)) for key in ("HOST", "PORT", "NAME", "USER", "PASSWORD")}
     missing = [prefix + key for key, value in values.items() if value is None]
     if missing:
-        raise ConfigurationError(f"{label}: set {', '.join(missing)} (see .env.example)")
+        env_file = PROJECT_ROOT / ".env"
+        where = env_file if env_file.is_file() else f"{env_file} (this file does not exist yet)"
+        raise ConfigurationError(f"{label}: set {', '.join(missing)} in {where}; .env.example lists every setting")
     try:
         port = int(values["PORT"])
     except ValueError:
@@ -151,6 +153,12 @@ def _db_config(label: str, prefix: str, defaults: dict[str, str]) -> DbConfig:
         password=values["PASSWORD"],
         ssl_ca=_env(prefix + "SSL_CA"),
     )
+
+
+def staging_configured() -> bool:
+    """Whether a staging database is set up. Without one (no SELLERBOARD_DB_USER /
+    SELLERBOARD_DB_PASSWORD), checked exports go straight to Power BI."""
+    return bool(_env("SELLERBOARD_DB_USER") and _env("SELLERBOARD_DB_PASSWORD"))
 
 
 def local_db_config() -> DbConfig:

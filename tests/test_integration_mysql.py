@@ -261,3 +261,65 @@ def test_local_only_batch_is_never_sent_to_power_bi(sandbox, tmp_path):
     stored = sandbox.query(f"SELECT `AmazonFees`, `RefundCost`, `Cost of Goods` FROM "
                            f"`{sandbox.database}`.uk_breakdown_staging WHERE `SKU` = 'A'")[0]
     assert [str(v) for v in stored.values()] == ["-90.9500", "-17.9800", "-49.3000"]
+
+
+@pytest.fixture
+def direct(sandbox, monkeypatch):
+    """Only POWERBI_DB_* configured, as on the cron server: no staging database."""
+    monkeypatch.setenv("SELLERBOARD_DB_USER", "")
+    monkeypatch.setenv("SELLERBOARD_DB_PASSWORD", "")
+    return sandbox
+
+
+def test_direct_mode_saves_every_value_into_power_bi(direct, project_dirs):
+    direct.seed(Date=dt.datetime(2026, 10, 12), Marketplace="Amazon.co.uk", ASIN="B0C787BTZ1", SKU="KEEP",
+                GrossProfit=1.0, Sessions="")  # an existing row: must stay exactly as it is
+    before = direct.dest_rows()
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    rows = [sample_row(SKU="KEEP", GrossProfit=99.0),             # already in Power BI -> left alone
+            sample_row(SKU="NEW-1"),                               # new -> inserted
+            sample_row(Date="13/10/2026", Marketplace="Amazon.de", SKU="NEW-2")]
+    write_workbook(incoming / EXPORT_NAME, rows)
+
+    assert run.main(["--preview", *SCOPE]) == 0                    # read-only: nothing written, file not moved
+    assert direct.dest_rows() == before and (incoming / EXPORT_NAME).exists()
+
+    assert run.main(["--no-fetch", *SCOPE]) == 0
+    after = direct.dest_rows()
+    assert after[:1] == before, "the existing Power BI row must be untouched"
+    new = {r["SKU"]: r for r in after[1:]}
+    assert sorted(new) == ["NEW-1", "NEW-2"]
+    de = new["NEW-2"]
+    assert (de["Date"], de["Marketplace"], de["ASIN"]) == (dt.datetime(2026, 10, 13), "Amazon.de", "B0C787BTZ1")
+    assert (de["Sessions"], de["SB"], de["Refunds"], de["SalesSponsoredDisplay"]) == ("26", "-0.52", "2", "")
+    assert de["UnitsOrganic"] == 8 and abs(de["SalesOrganic"] - 142.42) < 0.005 and abs(de["NetProfit"] - 14.58) < 0.005
+    assert (project_dirs / "processed" / EXPORT_NAME).exists() and not (incoming / EXPORT_NAME).exists()
+    tables = [list(t.values())[0] for t in direct.query(f"SHOW TABLES FROM `{direct.database}`")]
+    assert tables == ["Uk_breakdown_data"], "direct mode must not create any table"
+
+    shutil.copy2(project_dirs / "processed" / EXPORT_NAME, incoming / EXPORT_NAME)
+    assert run.main(["--no-fetch", *SCOPE]) == 0                   # the same file again: nothing inserted twice
+    assert direct.dest_rows() == after
+
+
+def test_direct_mode_power_bi_down_keeps_the_file_for_the_next_run(direct, project_dirs, monkeypatch):
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    write_workbook(incoming / EXPORT_NAME, [sample_row(SKU="A")])
+    good_port = os.environ["POWERBI_DB_PORT"]
+    monkeypatch.setenv("POWERBI_DB_PORT", "1")
+    assert run.main(["--no-fetch", *SCOPE]) == 9
+    assert (incoming / EXPORT_NAME).exists() and direct.dest_rows() == []
+    monkeypatch.setenv("POWERBI_DB_PORT", good_port)
+    assert run.main(["--no-fetch", *SCOPE]) == 0
+    assert [r["SKU"] for r in direct.dest_rows()] == ["A"]
+
+
+def test_direct_mode_rejected_rows_are_never_sent(direct, project_dirs):
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    write_workbook(incoming / EXPORT_NAME, [sample_row(SKU="A"), sample_row(SKU="B", UnitsOrganic=1.5)])
+    assert run.main(["--no-fetch", *SCOPE]) == 7
+    assert direct.dest_rows() == [] and (project_dirs / "failed" / EXPORT_NAME).exists()
+    assert run.main(["--no-fetch", "--local-only", *SCOPE]) == 2   # local-only needs a staging database

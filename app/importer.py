@@ -8,18 +8,23 @@
   in its Sellerboard file name, never later than yesterday (today is incomplete).
 * Power BI: every validated batch not yet synced is sent, newest first, insert-only
   (rows already in Power BI are never changed; see app/sync.py).
+* Direct mode: with no staging database configured (SELLERBOARD_DB_* unset), each
+  checked file goes straight to the same insert-only, verified Power BI sync; the
+  file stays in incoming/ until that succeeds, so a Power BI outage is retried.
 """
 from __future__ import annotations
 
 import datetime as dt
+import json
 import shutil
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import config, db, excel, staging
+from . import config, db, excel, schema, staging
 from .config import Settings
+from .exceptions import ConfigurationError
 from .logging_config import get_logger
 from .schedule import RunLock
 from .sync import MySQLDestination, SyncOutcome, SyncRefused, SyncUnverified, run_sync
@@ -60,10 +65,14 @@ class Importer:
         self.preview = preview
         self.local_only = local_only
         self.use_lock = use_lock
+        self.direct = not config.staging_configured()
 
     # ------------------------------------------------------------------ entry points
 
     def init_database(self) -> None:
+        if self.direct:
+            raise ConfigurationError("no staging database is configured (SELLERBOARD_DB_* not set), so there is "
+                                     "nothing to create: runs send checked exports straight to Power BI")
         conn = db.connect(config.local_db_config())
         try:
             staging.ensure_schema(conn, log)
@@ -71,6 +80,14 @@ class Importer:
             conn.close()
 
     def last_synced_end(self) -> dt.date | None:
+        if self.direct:  # the files that reached Power BI are the history
+            ends = []
+            for path in self.settings.processed_dir.glob("*.xlsx"):
+                period = excel.filename_period(path.name)
+                if period:
+                    downloaded = dt.date.fromtimestamp(path.stat().st_mtime)
+                    ends.append(min(period[1], downloaded - dt.timedelta(days=1)))
+            return max(ends) if ends else None
         conn = db.connect(config.local_db_config())
         try:
             staging.ensure_schema(conn, log)
@@ -85,9 +102,13 @@ class Importer:
             lock.__enter__()
         try:
             summary = RunSummary()
+            if self.direct:
+                if self.local_only:
+                    raise ConfigurationError("--local-only needs a staging database (SELLERBOARD_DB_* in .env)")
+                log.info("no staging database configured: checked exports go straight to Power BI")
             if fetch:
                 fetch()
-            if import_files:
+            if import_files or (self.preview and self.direct):
                 in_place = files is not None
                 targets = files if in_place else excel.find_input_files(self.settings.incoming_dir,
                                                                         self.settings.file_pattern)
@@ -95,7 +116,7 @@ class Importer:
                     log.info("no files waiting in %s", self.settings.incoming_dir)
                 for path in targets:
                     self._import_file(path, start, end, move=not in_place, summary=summary)
-            if self.sync or self.preview:
+            if (self.sync or self.preview) and not self.direct:
                 self._sync_pending(summary)
             return summary
         finally:
@@ -135,6 +156,9 @@ class Importer:
             if not plan.passed:
                 summary.exit_code = max(summary.exit_code, 7)
             return
+        if self.direct:
+            self._send_direct(path, plan, move=move, summary=summary)
+            return
 
         conn = db.connect(config.local_db_config())  # DatabaseUnavailable: the file stays in incoming/
         try:
@@ -161,6 +185,27 @@ class Importer:
 
     # ------------------------------------------------------------------ Power BI
 
+    def _destination(self):
+        powerbi = config.powerbi_db_config()
+        table = config.powerbi_table()
+        destination = f"{powerbi.describe()}.{table}"
+
+        def open_destination(read_only: bool) -> MySQLDestination:
+            return MySQLDestination(db.connect(powerbi, found_rows=True), table,
+                                    read_only=read_only, description=destination)
+
+        return open_destination, destination
+
+    def _sync_batch(self, repo, batch_id: str, summary: RunSummary) -> SyncOutcome:
+        open_destination, destination = self._destination()
+        log.info("Power BI %s: batch %s -> %s", "preview" if self.preview else "sync", batch_id, destination)
+        outcome = run_sync(repo, open_destination, batch_id, dry_run=self.preview,
+                           update_existing=False, destination_label=destination, log=log)
+        log_sync(outcome)
+        for key in ("insert", "unchanged", "conflict", "rejected"):
+            summary.powerbi[key] += outcome.plan.counts()[key]
+        return outcome
+
     def _sync_pending(self, summary: RunSummary) -> None:
         conn = db.connect(config.local_db_config())
         try:
@@ -170,28 +215,84 @@ class Importer:
             if not pending:
                 log.info("nothing waiting for Power BI")
                 return
-            powerbi = config.powerbi_db_config()
-            table = config.powerbi_table()
-            destination = f"{powerbi.describe()}.{table}"
-
-            def open_destination(read_only: bool) -> MySQLDestination:
-                return MySQLDestination(db.connect(powerbi, found_rows=True), table,
-                                        read_only=read_only, description=destination)
-
             for batch_id in pending:
-                log.info("Power BI %s: batch %s -> %s", "preview" if self.preview else "sync", batch_id, destination)
                 try:
-                    outcome = run_sync(repo, open_destination, batch_id, dry_run=self.preview,
-                                       update_existing=False, destination_label=destination, log=log)
+                    self._sync_batch(repo, batch_id, summary)
                 except (SyncRefused, SyncUnverified) as exc:
                     log.error("batch %s: %s", batch_id, exc)
                     summary.exit_code = max(summary.exit_code, exc.exit_code)
-                    continue
-                log_sync(outcome)
-                for key in ("insert", "unchanged", "conflict", "rejected"):
-                    summary.powerbi[key] += outcome.plan.counts()[key]
         finally:
             conn.close()
+
+    def _send_direct(self, path: Path, plan: excel.ImportPlan, *, move: bool, summary: RunSummary) -> None:
+        """Direct mode: one checked file straight to Power BI. A database error leaves
+        the file in incoming/ (retried next run); only a verified sync moves it."""
+        if not plan.passed:
+            log.error("%s: %d rejected rows; nothing sent to Power BI", path.name, plan.count("rejected"))
+            summary.files["failed"] += 1
+            summary.exit_code = max(summary.exit_code, 7)
+            if move and not self.preview:
+                self._move(path, self.settings.failed_dir)
+            return
+        repo = PlanRepository(plan)
+        try:
+            self._sync_batch(repo, repo.batch_id, summary)
+        except SyncRefused as exc:
+            log.error("%s: %s", path.name, exc)
+            summary.files["failed"] += 1
+            summary.exit_code = max(summary.exit_code, exc.exit_code)
+            if move and not self.preview:
+                self._move(path, self.settings.failed_dir)
+            return
+        except SyncUnverified as exc:  # possibly committed: the next run re-checks it (rows then "unchanged")
+            log.error("%s: %s; the file stays in incoming/ and is checked again next run", path.name, exc)
+            summary.exit_code = max(summary.exit_code, exc.exit_code)
+            return
+        if self.preview:
+            summary.files["checked"] += 1
+            return
+        summary.files["imported"] += 1
+        summary.rows_staged += plan.count("valid")
+        if move:
+            self._move(path, self.settings.processed_dir)
+
+
+class PlanRepository:
+    """What the Power BI sync reads from staging, served from one in-memory checked
+    file (direct mode). Nothing is stored: the file itself is the record."""
+
+    def __init__(self, plan: excel.ImportPlan):
+        self.batch_id = "file-" + plan.fingerprint()[:12]
+        valid = [row for row in plan.rows if row.status == "valid"]
+        self._rows = [
+            {"staging_id": number, "source_file": row.source_file,
+             "extra_columns": json.dumps(row.extra, ensure_ascii=False) if row.extra else None,
+             **{column.name: row.values.get(column.name) for column in schema.ALL_COLUMNS}}
+            for number, row in enumerate(valid, 1)
+        ]
+        self._batch = {"batch_id": self.batch_id, "status": "imported", "validation_status": "passed",
+                       "start_date": plan.start_date, "end_date": plan.end_date,
+                       "marketplaces": list(plan.marketplaces), "rows_valid": len(valid),
+                       "rows_rejected": plan.count("rejected")}
+        self._files = {parsed.path.name: parsed.mapped_columns for parsed in plan.files}
+
+    def get_batch(self, batch_id: str) -> dict | None:
+        return dict(self._batch) if batch_id == self.batch_id else None
+
+    def load_valid_rows(self, batch_id: str) -> list[dict]:
+        return self._rows
+
+    def file_columns(self, batch_id: str) -> dict[str, list[str]]:
+        return self._files
+
+    def start_sync_run(self, batch_id: str, *, update_existing: bool, destination: str) -> int:
+        return 1
+
+    def fail_sync_run(self, *args, **kwargs) -> None:
+        pass
+
+    def complete_sync_run(self, *args, **kwargs) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------- reporting
