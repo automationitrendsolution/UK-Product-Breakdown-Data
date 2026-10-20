@@ -102,4 +102,7 @@ def project_dirs(tmp_path, monkeypatch):
     data, logs = tmp_path / "data", tmp_path / "logs"
     monkeypatch.setenv("SELLERBOARD_DATA_DIR", str(data))
     monkeypatch.setenv("SELLERBOARD_LOG_DIR", str(logs))
+    # Never the real Sellerboard account: a test must not be able to sign in for real.
+    monkeypatch.setenv("SELLERBOARD_LOGIN_EMAIL", "")
+    monkeypatch.setenv("SELLERBOARD_LOGIN_PASSWORD", "")
     return data

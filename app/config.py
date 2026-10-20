@@ -65,6 +65,8 @@ class Settings:
     marketplaces: tuple[str, ...]
     window_days: int
     max_catchup_days: int
+    login_email: str | None = field(default=None, repr=False)
+    login_password: str | None = field(default=None, repr=False)
 
     @property
     def incoming_dir(self) -> Path:
@@ -110,6 +112,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         marketplaces=allowed_marketplaces(),
         window_days=_int("SELLERBOARD_WINDOW_DAYS", 3),
         max_catchup_days=_int("SELLERBOARD_MAX_CATCHUP_DAYS", 31),
+        login_email=_env("SELLERBOARD_LOGIN_EMAIL"),
+        login_password=_env("SELLERBOARD_LOGIN_PASSWORD"),
     )
 
 

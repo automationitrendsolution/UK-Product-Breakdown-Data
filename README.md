@@ -81,9 +81,11 @@ uv run python run.py --init-db
 The staging MySQL must be reachable with `SELLERBOARD_DB_*`. The Power BI user needs only
 `SELECT, INSERT` on `powerbidb.Uk_breakdown_data`.
 
-**Sellerboard sign-in.** The login page has reCAPTCHA, so the job never types a password. On a PC with Google
-Chrome run `uv run python run.py --login`, sign in (tick *Keep me logged in*) and close Chrome; then copy
-`data/browser/session.json` to the same path on the server. Repeat whenever a run exits with 3.
+**Sellerboard sign-in.** Put `SELLERBOARD_LOGIN_EMAIL` / `SELLERBOARD_LOGIN_PASSWORD` in `.env`, then on the server run
+`uv run python run.py --login`: it signs in headless in the terminal (one attempt, *Keep me logged in*) and saves
+`data/browser/session.json`. Later runs reuse that session; if it has expired they sign in once more by themselves.
+A refused sign-in is reported with a screenshot, and scheduled runs then wait 24 hours before another attempt, so
+the account is not locked. On a PC, `--login` opens a Chrome window instead (`--login --terminal` forces the terminal).
 
 **Export clicks.** Run `uv run python run.py --inspect-page`, then fill `export_steps` in
 `config/selectors.json` from the screenshot and control list it writes to `data/screenshots/`, and set

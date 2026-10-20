@@ -69,17 +69,111 @@ def _load_selectors(settings: Settings) -> dict:
 # --------------------------------------------------------------------------- sign-in
 
 
+AUTOMATIC_RETRY_AFTER = dt.timedelta(hours=24)
+
+
 def login(settings: Settings, *, headed: bool, timeout_minutes: int = 20) -> None:
-    """A person signs in once; the session is saved for scheduled runs."""
+    """Save a session for scheduled runs: in a Chrome window when there is a screen,
+    otherwise in the terminal with the .env credentials."""
     if not headed:
-        raise SignInNeeded(
-            "no display here: run `python run.py --login` on a PC, then copy data/browser/session.json "
-            f"to {settings.session_file} on this server"
-        )
+        credential_login(settings, automatic=False)
+        return
     chrome = find_chrome()
     if chrome is None:
         raise ConfigurationError("Google Chrome is not installed; it is needed for the one-time sign-in")
     _chrome_login(settings, chrome, timeout_minutes=timeout_minutes)
+
+
+def _attempts_file(settings: Settings) -> Path:
+    return settings.session_file.parent / "login-attempts.json"
+
+
+def _last_failure(settings: Settings) -> dt.datetime | None:
+    try:
+        record = json.loads(_attempts_file(settings).read_text(encoding="utf-8"))
+        return dt.datetime.fromisoformat(record["last_failure"]) if record.get("last_failure") else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _record_attempt(settings: Settings, ok: bool, detail: str) -> None:
+    path = _attempts_file(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"last_attempt": dt.datetime.now().isoformat(timespec="seconds"), "ok": ok, "detail": detail[:300]}
+    record["last_failure"] = None if ok else record["last_attempt"]
+    path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+
+
+def credential_login(settings: Settings, *, automatic: bool) -> None:
+    """Sign in headless with SELLERBOARD_LOGIN_EMAIL/PASSWORD and save the session.
+
+    Exactly one attempt, like a person would make: fill the form, tick "Keep me
+    logged in", click Continue. Nothing works around the page's reCAPTCHA; if
+    Sellerboard refuses, the reason and a screenshot are reported and, for
+    automatic (scheduled) attempts, no new attempt is made for 24 hours, because
+    repeated failed sign-ins lock the account.
+    """
+    import sys
+
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright
+
+    if not (settings.login_email and settings.login_password):
+        raise SignInNeeded("set SELLERBOARD_LOGIN_EMAIL and SELLERBOARD_LOGIN_PASSWORD in .env, or copy a "
+                           f"session.json from a PC to {settings.session_file}")
+    last = _last_failure(settings)
+    if automatic and last and dt.datetime.now() - last < AUTOMATIC_RETRY_AFTER:
+        raise SignInNeeded(f"the last automatic sign-in was refused at {last:%Y-%m-%d %H:%M}; not trying again "
+                           "for 24 hours so the account is not locked. Run `python run.py --login` by hand.")
+    if last:
+        print(f"note: the previous sign-in was refused at {last:%Y-%m-%d %H:%M}", flush=True)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 1400, "height": 900}, locale="en-GB")
+        page = context.new_page()
+        try:
+            print("opening the Sellerboard login page ...", flush=True)
+            page.goto(LOGIN_URL, wait_until="networkidle", timeout=90_000)
+            page.fill("#username", settings.login_email)
+            page.fill("#password", settings.login_password)
+            keep = page.locator("#keeploggedin")
+            try:
+                if not keep.is_checked():
+                    keep.check(timeout=5_000)
+            except PlaywrightTimeout:
+                page.get_by_text("Keep me logged in").first.click()
+            print(f"signing in as {settings.login_email} (one attempt) ...", flush=True)
+            page.locator("button[type=submit]").first.click()
+            try:
+                page.wait_for_url(lambda url: not is_login_page(url), timeout=45_000)
+            except PlaywrightTimeout:
+                pass
+
+            code_box = page.locator("input[autocomplete=one-time-code], input[name*=code i], input[name*=otp i]")
+            if is_login_page(page.url) and code_box.count() and sys.stdin.isatty():
+                code = input("Sellerboard verification code: ").strip()
+                code_box.first.fill(code)
+                code_box.first.press("Enter")
+                try:
+                    page.wait_for_url(lambda url: not is_login_page(url), timeout=45_000)
+                except PlaywrightTimeout:
+                    pass
+
+            if is_login_page(page.url):
+                messages = [t.strip() for t in page.locator(
+                    ".alert, .error, .invalid-feedback, .help-block, .form-error, [class*=error]").all_inner_texts()
+                    if t.strip()]
+                detail = "; ".join(dict.fromkeys(messages))[:200] or "no message shown"
+                shot = _screenshot(page, settings, "login-refused")
+                _record_attempt(settings, False, detail)
+                raise SignInNeeded(f"Sellerboard did not accept the sign-in ({detail}); see {shot}. "
+                                   "Do not retry repeatedly: copy a session.json from a PC instead.")
+            _save_session(context, settings.session_file)
+            _record_attempt(settings, True, page.url)
+            print(f"signed in; session saved to {settings.session_file}", flush=True)
+        finally:
+            browser.close()
 
 
 def _chrome_login(settings: Settings, chrome: str, *, port: int = 9222, timeout_minutes: int = 20) -> None:

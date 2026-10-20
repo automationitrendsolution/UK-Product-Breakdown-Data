@@ -38,7 +38,7 @@ sys.dont_write_bytecode = True  # no __pycache__ folders in the project; set bef
 
 from app import __version__, sellerboard
 from app.config import load_settings
-from app.exceptions import ConfigurationError, PipelineError
+from app.exceptions import ConfigurationError, PipelineError, SignInNeeded
 from app.importer import Importer
 from app.logging_config import append_run, configure_logging, get_logger
 from app.schedule import report_window
@@ -46,7 +46,8 @@ from app.schedule import report_window
 _HELP_EPILOG = """
 examples:
   python run.py                     download the last 3 full days, import, sync to Power BI (cron)
-  python run.py --login             one-time Sellerboard sign-in by a person (opens Chrome)
+  python run.py --login             one-time Sellerboard sign-in (Chrome window, or the terminal on a server)
+  python run.py --login --terminal  sign in in the terminal with SELLERBOARD_LOGIN_EMAIL/PASSWORD from .env
   python run.py --fetch-only        download the export into data/incoming/ only
   python run.py --no-fetch          import what is already in data/incoming/, then sync
   python run.py --no-sync           download and import; do not touch Power BI
@@ -97,6 +98,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", type=_date, help="First report day (default: the 3-day window).")
     parser.add_argument("--end-date", type=_date, help="Last report day (default: yesterday).")
     parser.add_argument("--headed", action="store_true", help="Show the browser window (debugging).")
+    parser.add_argument("--terminal", action="store_true",
+                        help="With --login: sign in in this terminal with the .env credentials (no window).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Parse and validate only. No Sellerboard, MySQL or file moves.")
     parser.add_argument("--env-file", type=Path, metavar="PATH", help="Alternative .env file.")
@@ -151,7 +154,7 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
         logger.info("Staging tables are ready")
         return 0, "init-db"
     if args.login:
-        sellerboard.login(settings, headed=args.headed or _has_display())
+        sellerboard.login(settings, headed=(args.headed or _has_display()) and not args.terminal)
         return 0, "signed in"
     if args.inspect_page:
         shot, controls = sellerboard.inspect_page(settings, headless=not args.headed)
@@ -176,7 +179,14 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
             start, end = report_window(dt.date.today(), settings.window_days, importer.last_synced_end(),
                                        settings.max_catchup_days)
         logger.info("downloading Sellerboard 'Dashboard by product' %s..%s", start, end)
-        return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
+        try:
+            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
+        except SignInNeeded:
+            if not (settings.login_email and settings.login_password):
+                raise
+            logger.warning("Sellerboard session missing or expired: signing in with the .env credentials")
+            sellerboard.credential_login(settings, automatic=True)
+            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
 
     wants_fetch = not (args.no_fetch or args.dry_run or args.preview or files)
     summary = importer.run(files, fetch=fetch if wants_fetch else None, start=args.start_date,

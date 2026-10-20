@@ -185,3 +185,47 @@ def test_successful_batch_commits_once_after_all_rows(tmp_path, log):
     ops = [entry[0] for entry in conn.log]
     assert ops.count("commit") == 2  # the batch header, then all data in one transaction
     assert "rollback" not in ops
+
+
+def test_terminal_login_needs_credentials_and_opens_no_browser(monkeypatch):
+    from app.config import load_settings
+    monkeypatch.delenv("SELLERBOARD_LOGIN_EMAIL", raising=False)
+    monkeypatch.setenv("SELLERBOARD_LOGIN_EMAIL", "")
+    settings = load_settings()
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: (_ for _ in ()).throw(AssertionError("browser")))
+    with pytest.raises(SignInNeeded, match="SELLERBOARD_LOGIN_EMAIL"):
+        sellerboard.credential_login(settings, automatic=True)
+
+
+def test_refused_automatic_sign_in_is_not_repeated_for_24_hours(monkeypatch):
+    from app.config import load_settings
+    monkeypatch.setenv("SELLERBOARD_LOGIN_EMAIL", "someone@example.com")
+    monkeypatch.setenv("SELLERBOARD_LOGIN_PASSWORD", "not-a-real-password")
+    settings = load_settings()
+    sellerboard._record_attempt(settings, False, "Invalid login")
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: (_ for _ in ()).throw(AssertionError("browser")))
+    with pytest.raises(SignInNeeded, match="not trying again"):
+        sellerboard.credential_login(settings, automatic=True)
+    assert "not-a-real-password" not in repr(settings)
+
+
+def test_expired_session_signs_in_once_then_downloads(project_dirs, local_env, no_database, monkeypatch):
+    monkeypatch.setenv("SELLERBOARD_LOGIN_EMAIL", "someone@example.com")
+    monkeypatch.setenv("SELLERBOARD_LOGIN_PASSWORD", "not-a-real-password")
+    calls = {"fetch": 0, "login": 0}
+
+    def fetch(settings, start, end, headless=True):
+        calls["fetch"] += 1
+        if calls["fetch"] == 1:
+            raise SignInNeeded("Sellerboard ended the saved session")
+        return write_workbook(settings.incoming_dir / EXPORT_NAME, [sample_row()])
+
+    def login(settings, automatic):
+        assert automatic is True
+        calls["login"] += 1
+
+    monkeypatch.setattr(sellerboard, "fetch_report", fetch)
+    monkeypatch.setattr(sellerboard, "credential_login", login)
+    assert run.main(["--fetch-only", *SCOPE]) == 0
+    assert calls == {"fetch": 2, "login": 1}
+    assert (project_dirs / "incoming" / EXPORT_NAME).exists()
