@@ -67,6 +67,7 @@ class Settings:
     max_catchup_days: int
     login_email: str | None = field(default=None, repr=False)
     login_password: str | None = field(default=None, repr=False)
+    update_existing: bool = False
 
     @property
     def incoming_dir(self) -> Path:
@@ -110,10 +111,11 @@ def load_settings(env_file: Path | None = None) -> Settings:
         log_level=_env("LOG_LEVEL", "INFO").upper(),
         file_pattern=_env("SELLERBOARD_FILE_PATTERN", DEFAULT_FILE_PATTERN),
         marketplaces=allowed_marketplaces(),
-        window_days=_int("SELLERBOARD_WINDOW_DAYS", 3),
+        window_days=_int("SELLERBOARD_WINDOW_DAYS", 4),
         max_catchup_days=_int("SELLERBOARD_MAX_CATCHUP_DAYS", 31),
         login_email=_env("SELLERBOARD_LOGIN_EMAIL"),
         login_password=_env("SELLERBOARD_LOGIN_PASSWORD"),
+        update_existing=(_env("SELLERBOARD_UPDATE_EXISTING", "false") or "").lower() in ("1", "true", "yes", "on"),
     )
 
 

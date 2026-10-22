@@ -1,6 +1,6 @@
 # sellerboard-uk-breakdown-cron
 
-Downloads Sellerboard's **Dashboard by product** export for the last 3 full days, stages it in a local
+Downloads Sellerboard's **Dashboard by product** export for the last 4 full days, stages it in a local
 MySQL database (`sellerboard`), then inserts the rows Power BI does not have yet into
 `powerbidb.Uk_breakdown_data`. Existing Power BI rows are never changed or deleted.
 
@@ -29,7 +29,7 @@ Sellerboard (Playwright, saved session)
 ## Modes
 
 ```bash
-uv run python run.py                  # download the last 3 full days, import, sync (cron)
+uv run python run.py                  # download the last 4 full days, import, sync (cron)
 uv run python run.py --login          # one-time Sellerboard sign-in by a person (opens Chrome)
 uv run python run.py --fetch-only     # download into data/incoming/ only
 uv run python run.py --no-fetch       # import data/incoming/, then sync
@@ -41,7 +41,7 @@ uv run python run.py --file x.xlsx    # import one file in place (not moved), th
 uv run python run.py --init-db        # create the staging tables and exit
 ```
 
-`--start-date` / `--end-date` (YYYY-MM-DD) override the window. Default window: the last 3 full days
+`--start-date` / `--end-date` (YYYY-MM-DD) override the window. Default window: the last 4 full days
 (today is excluded, its numbers are still moving); after a missed or failed run it starts the day after the
 newest day already in Power BI (at most 31 days back).
 
@@ -91,10 +91,10 @@ the account is not locked. On a PC, `--login` opens a Chrome window instead (`--
 `config/selectors.json` from the screenshot and control list it writes to `data/screenshots/`, and set
 `"verified": true`. Until then a scheduled run exits with 4 and imports nothing.
 
-**Cron** (`deploy/crontab.example`), 13:00 every 3 days:
+**Cron** (`deploy/crontab.example`), daily at 13:00, last 4 full days (`SELLERBOARD_WINDOW_DAYS=4`):
 
 ```cron
-0 13 */3 * * cd /data/cron/sellerboard-uk-breakdown-cron && /root/.local/bin/uv run --no-sync python run.py --quiet >> logs/cron-output.log 2>&1
+0 13 * * * cd /data/cron/UK-Product-Breakdown-Data && /root/.local/bin/uv run --no-sync python run.py --quiet >> logs/cron-output.log 2>&1
 ```
 
 Check runs with `tail logs/cron.log`; details are in `logs/importer.log`.

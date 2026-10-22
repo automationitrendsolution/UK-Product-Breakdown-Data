@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sellerboard UK breakdown -- command-line entry point.
 
-Downloads Sellerboard's "Dashboard by product" export for the last 3 full days
+Downloads Sellerboard's "Dashboard by product" export for the last 4 full days
 with Playwright (reusing a session a person signed in to once), imports it -- and
 any export placed in ``data/incoming/`` by hand -- into the local MySQL staging
 database, then inserts the rows Power BI does not have yet into
@@ -9,7 +9,7 @@ powerbidb.Uk_breakdown_data. Existing Power BI rows are never changed or deleted
 
 Running under cron
 ------------------
-Cron calls ``uv run --no-sync python run.py --quiet`` at 13:00 every 3 days from
+Cron calls ``uv run --no-sync python run.py --quiet`` daily at 13:00 from
 the project directory (see ``deploy/crontab.example``). Overlapping runs are
 refused by an internal lock (exit 11). A missed run is caught up by the next one.
 
@@ -45,7 +45,7 @@ from app.schedule import report_window
 
 _HELP_EPILOG = """
 examples:
-  python run.py                     download the last 3 full days, import, sync to Power BI (cron)
+  python run.py                     download the last 4 full days, import, sync to Power BI (cron)
   python run.py --login             one-time Sellerboard sign-in (Chrome window, or the terminal on a server)
   python run.py --login --terminal  sign in in the terminal with SELLERBOARD_LOGIN_EMAIL/PASSWORD from .env
   python run.py --fetch-only        download the export into data/incoming/ only
@@ -91,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--preview", action="store_true",
                        help="Show what the sync would insert into Power BI for staged batches; writes nothing.")
     parser.add_argument("--no-fetch", action="store_true", help="Do not download this run; import incoming/ only.")
+    parser.add_argument("--update-existing", action="store_true",
+                        help="Also update Power BI rows of the window whose values changed in Sellerboard "
+                             "(same as SELLERBOARD_UPDATE_EXISTING=true). Nothing is ever deleted.")
     parser.add_argument("--no-sync", action="store_true",
                         help="Do not send to Power BI this run (a later run still sends the batch).")
     parser.add_argument("--local-only", action="store_true",
@@ -170,7 +173,8 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
             return 2, "file not found"
 
     importer = Importer(settings, dry_run=args.dry_run, sync=not (args.no_sync or args.fetch_only or args.local_only),
-                        preview=args.preview, use_lock=not args.no_lock, local_only=args.local_only)
+                        preview=args.preview, use_lock=not args.no_lock, local_only=args.local_only,
+                        update_existing=args.update_existing or settings.update_existing)
 
     def fetch() -> Path:
         if args.start_date and args.end_date:

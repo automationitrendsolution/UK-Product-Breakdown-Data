@@ -58,12 +58,14 @@ def scope_for(path: Path, start: dt.date | None, end: dt.date | None, today: dt.
 
 class Importer:
     def __init__(self, settings: Settings, *, dry_run: bool = False, sync: bool = True,
-                 preview: bool = False, use_lock: bool = True, local_only: bool = False):
+                 preview: bool = False, use_lock: bool = True, local_only: bool = False,
+                 update_existing: bool = False):
         self.settings = settings
         self.dry_run = dry_run
         self.sync = sync and not dry_run
         self.preview = preview
         self.local_only = local_only
+        self.update_existing = update_existing
         self.use_lock = use_lock
         self.direct = not config.staging_configured()
 
@@ -200,9 +202,9 @@ class Importer:
         open_destination, destination = self._destination()
         log.info("Power BI %s: batch %s -> %s", "preview" if self.preview else "sync", batch_id, destination)
         outcome = run_sync(repo, open_destination, batch_id, dry_run=self.preview,
-                           update_existing=False, destination_label=destination, log=log)
+                           update_existing=self.update_existing, destination_label=destination, log=log)
         log_sync(outcome)
-        for key in ("insert", "unchanged", "conflict", "rejected"):
+        for key in ("insert", "update", "unchanged", "conflict", "rejected"):
             summary.powerbi[key] += outcome.plan.counts()[key]
         return outcome
 
@@ -319,20 +321,23 @@ def log_plan(plan: excel.ImportPlan) -> None:
 
 def log_sync(outcome: SyncOutcome) -> None:
     plan = outcome.plan
-    log.info("%-10s  %-14s  %7s  %6s  %6s  %9s  %8s  %8s", "date", "marketplace", "in dest", "staged",
-             "insert", "unchanged", "conflict", "rejected")
-    for day, market, existing, staged, insert, _update, unchanged, conflict, rejected in plan.by_date_marketplace():
-        log.info("%-10s  %-14s  %7d  %6d  %6d  %9d  %8d  %8d", day, market, existing, staged, insert,
-                 unchanged, conflict, rejected)
+    log.info("%-10s  %-14s  %7s  %6s  %6s  %6s  %9s  %8s  %8s", "date", "marketplace", "in dest", "staged",
+             "insert", "update", "unchanged", "conflict", "rejected")
+    for day, market, existing, staged, insert, update, unchanged, conflict, rejected in plan.by_date_marketplace():
+        log.info("%-10s  %-14s  %7d  %6d  %6d  %6d  %9d  %8d  %8d", day, market, existing, staged, insert,
+                 update, unchanged, conflict, rejected)
+    for action in plan.of("update")[:5]:
+        changes = ", ".join(f"{c}: {d!r} -> {s}" for c, s, d in action.differences[:3])
+        log.info("update %s (id %s): %s", action.label, action.dest_row["id"], changes)
     for action in plan.of("conflict")[:5]:
         changes = ", ".join(f"{c}: {s} vs {d!r}" for c, s, d in action.differences[:3])
         log.info("conflict (left unchanged) %s: %s", action.label, changes)
     c = plan.counts()
     if outcome.dry_run:
-        log.info("PREVIEW (nothing written): would insert %d; unchanged %d, conflict %d, rejected %d",
-                 c["insert"], c["unchanged"], c["conflict"], c["rejected"])
+        log.info("PREVIEW (nothing written): would insert %d, update %d; unchanged %d, conflict %d, rejected %d",
+                 c["insert"], c["update"], c["unchanged"], c["conflict"], c["rejected"])
     else:
         e = outcome.execution
-        log.info("SYNCED AND VERIFIED: inserted %d, unchanged %d, conflict %d (left as they are), rejected %d; "
-                 "Power BI rows in range %d -> %d", e["inserted"], c["unchanged"], c["conflict"], c["rejected"],
-                 e["destination_rows_before"], e["destination_rows_after"])
+        log.info("SYNCED AND VERIFIED: inserted %d, updated %d, unchanged %d, conflict %d (left as they are), "
+                 "rejected %d; Power BI rows in range %d -> %d", e["inserted"], e["updated"], c["unchanged"],
+                 c["conflict"], c["rejected"], e["destination_rows_before"], e["destination_rows_after"])

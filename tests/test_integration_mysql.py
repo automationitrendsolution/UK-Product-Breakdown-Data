@@ -323,3 +323,30 @@ def test_direct_mode_rejected_rows_are_never_sent(direct, project_dirs):
     assert run.main(["--no-fetch", *SCOPE]) == 7
     assert direct.dest_rows() == [] and (project_dirs / "failed" / EXPORT_NAME).exists()
     assert run.main(["--no-fetch", "--local-only", *SCOPE]) == 2   # local-only needs a staging database
+
+
+def test_daily_update_refreshes_changed_rows_in_place_and_deletes_nothing(direct, project_dirs, monkeypatch):
+    monkeypatch.setenv("SELLERBOARD_UPDATE_EXISTING", "true")
+    direct.seed(Date=dt.datetime(2026, 10, 1), Marketplace="Amazon.co.uk", ASIN="B0OLDOLD01", SKU="OUTSIDE",
+                GrossProfit=5.0)                                             # outside the window
+    direct.seed(Date=dt.datetime(2026, 10, 12), Marketplace="Amazon.co.uk", ASIN="B0C787BTZ1", SKU="CHANGED",
+                SalesOrganic=100.0, GrossProfit=1.0, Sessions="")           # Sellerboard restated it
+    direct.seed(Date=dt.datetime(2026, 10, 12), Marketplace="Amazon.co.uk", ASIN="B0C787BTZ1", SKU="GONE",
+                GrossProfit=2.0)                                             # not in the new export
+    before = {r["SKU"]: r for r in direct.dest_rows()}
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    write_workbook(incoming / EXPORT_NAME, [sample_row(SKU="CHANGED"), sample_row(SKU="NEW")])
+
+    assert run.main(["--no-fetch", *SCOPE]) == 0
+    after = {r["SKU"]: r for r in direct.dest_rows()}
+    assert sorted(after) == ["CHANGED", "GONE", "NEW", "OUTSIDE"], "nothing deleted, one row added"
+    assert after["OUTSIDE"] == before["OUTSIDE"] and after["GONE"] == before["GONE"]
+    changed = after["CHANGED"]
+    assert changed["id"] == before["CHANGED"]["id"], "updated in place, not re-inserted"
+    assert abs(changed["SalesOrganic"] - 142.42) < 0.005 and abs(changed["GrossProfit"] - 14.58) < 0.005
+    assert changed["Sessions"] == "26"
+
+    shutil.copy2(project_dirs / "processed" / EXPORT_NAME, incoming / EXPORT_NAME)
+    assert run.main(["--no-fetch", *SCOPE]) == 0                    # the next day: nothing left to change
+    assert {r["SKU"]: r for r in direct.dest_rows()} == after
