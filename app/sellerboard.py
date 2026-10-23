@@ -276,7 +276,7 @@ def _template_values(start: dt.date, end: dt.date) -> dict:
 
 def _ensure_account(page, selectors: dict, settings: Settings) -> None:
     """Switch Sellerboard to the configured account (e.g. Uk-AMZ) if another one is selected."""
-    wanted = selectors.get("account")
+    wanted = settings.account or selectors.get("account")
     if not wanted:
         return
     opener = page.locator(selectors["account_opener"]).first

@@ -29,7 +29,7 @@ Sellerboard (Playwright, saved session)
 ## Modes
 
 ```bash
-uv run python run.py                  # download the last 4 full days, import, sync (cron)
+uv run python run.py --uk-amazon      # download the last 4 full days, import, sync (cron)
 uv run python run.py --login          # one-time Sellerboard sign-in by a person (opens Chrome)
 uv run python run.py --fetch-only     # download into data/incoming/ only
 uv run python run.py --no-fetch       # import data/incoming/, then sync
@@ -67,6 +67,27 @@ newest day already in Power BI (at most 31 days back).
 * **Power BI** — every validated batch not yet synced, newest first. A key Power BI lacks is inserted; a key it
   already has is left exactly as it is (counted as unchanged or conflict). Nothing is updated or deleted. Success is
   reported only after a fresh read confirms every inserted row and every pre-existing row.
+
+## Two accounts, one command
+
+```bash
+uv run python run.py --uk-amazon               # Uk-AMZ -> Uk_breakdown_data (also the default with no flag)
+uv run python run.py --us-premium              # premiumcarproduct -> Sellerboard_breakdown_data_2024
+uv run python run.py --us-premium --dry-run    # US: what would be replaced (Power BI read-only)
+uv run python run.py --us-premium --no-fetch   # US: upload what is already in data/us/incoming/
+```
+
+The US settings are the `US_` lines in the same `.env` (account, table, marketplaces, file name); passwords and the
+Sellerboard login are shared, and the US job has its own `data/us/` and `logs/us/` folders.
+
+* **UK** (`app/importer.py`): inserts rows Power BI does not have yet and, with `SELLERBOARD_UPDATE_EXISTING=true`,
+  updates changed rows in place. Never deletes.
+* **US** (`app/us_upload.py`, the corrected `sellerboard_upload.py`): the downloaded days replace the same days and
+  marketplaces in Power BI, delete + insert in one transaction checked before the commit. Summary exports (no fee /
+  COGS breakdown) are refused, today's partial day is left out, and the Excel is kept in `data/us/processed/`.
+
+Run the two accounts at least 30 minutes apart (see `deploy/crontab.example`): both use one Sellerboard login and
+switch its account.
 
 ## Setup on the cron server
 

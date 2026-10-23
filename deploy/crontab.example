@@ -1,8 +1,14 @@
-# Sellerboard UK breakdown -> Power BI: once a day at 13:00 (server time), last 4 full days.
-# Set SELLERBOARD_WINDOW_DAYS=4 in .env. Each day the window overlaps the 3 days before: rows
-# already in Power BI are skipped (insert-only), so the overlap never creates duplicates.
-# Install with `crontab -e`, replacing any older Sellerboard line (e.g. an hourly one).
-# Use absolute paths: cron's PATH is minimal (`which uv` shows uv's path).
-# Each run appends one summary line to logs/cron.log; details go to logs/importer.log.
+# Sellerboard -> Power BI, once a day, last 4 full days (server clock is UTC: 07:30 UTC = 13:00 IST).
+# UK  (account Uk-AMZ)              -> powerbidb.Uk_breakdown_data              13:00 IST
+# US  (account premiumcarproduct)   -> powerbidb.Sellerboard_breakdown_data_2024 13:30 IST (--us-premium)
+# The 30-minute gap keeps the two runs apart: both use the same Sellerboard login and switch its account.
+# `timeout -k 1m 20m` stops a hung run, so it can never overlap the next one. A failed run only writes
+# its log and exits; it never stops the other job.
+# Install with `crontab -e`, replacing older Sellerboard lines. Use absolute paths (`which uv`).
 MAILTO=""
-0 13 * * * cd /data/cron/UK-Product-Breakdown-Data && /root/.local/bin/uv run --no-sync python run.py --quiet >> logs/cron-output.log 2>&1
+#<<<<<<<<<<<<<<<<<<<<< UK-Product-Breakdown-Data Start >>>>>>>>>>>>>>>>>>>>>>
+30 7 * * * cd /data/cron/UK-Product-Breakdown-Data && timeout -k 1m 20m /root/.local/bin/uv run --no-sync python run.py --uk-amazon --quiet >> logs/cron-output.log 2>&1
+#<<<<<<<<<<<<<<<<<<<< UK-Product-Breakdown-Data End >>>>>>>>>>>>>>>>>>>>>>
+#<<<<<<<<<<<<<<<<<<<<< US-Premiumcarproduct Start >>>>>>>>>>>>>>>>>>>>>>
+0 8 * * * cd /data/cron/UK-Product-Breakdown-Data && timeout -k 1m 20m /root/.local/bin/uv run --no-sync python run.py --us-premium --quiet >> logs/cron-output-us.log 2>&1
+#<<<<<<<<<<<<<<<<<<<< US-Premiumcarproduct End >>>>>>>>>>>>>>>>>>>>>>

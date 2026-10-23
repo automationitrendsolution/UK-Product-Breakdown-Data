@@ -229,3 +229,35 @@ def test_expired_session_signs_in_once_then_downloads(project_dirs, local_env, n
     assert run.main(["--fetch-only", *SCOPE]) == 0
     assert calls == {"fetch": 2, "login": 1}
     assert (project_dirs / "incoming" / EXPORT_NAME).exists()
+
+
+def test_profile_reads_prefixed_settings_from_the_single_env(monkeypatch):
+    import os
+    from app import config as cfg
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # what load_settings writes is thrown away afterwards
+    for name in list(os.environ):
+        if name.startswith(("SELLERBOARD_ACCOUNT", "SELLERBOARD_STAGING", "SELLERBOARD_SESSION_FILE")):
+            del os.environ[name]
+    os.environ.update({
+        "SELLERBOARD_DATA_DIR": "data", "POWERBI_DB_TABLE": "Uk_breakdown_data",
+        "SELLERBOARD_ALLOWED_MARKETPLACES": "Amazon.co.uk",
+        "US_SELLERBOARD_ACCOUNT": "premiumcarproduct@gmail.com",
+        "US_POWERBI_DB_TABLE": "Sellerboard_breakdown_data_2024",
+        "US_SELLERBOARD_ALLOWED_MARKETPLACES": "Amazon.com,Amazon.ca",
+    })
+    settings = cfg.load_settings(profile="us")
+    assert settings.account == "premiumcarproduct@gmail.com"
+    assert cfg.powerbi_table() == "Sellerboard_breakdown_data_2024"
+    assert settings.marketplaces == ("Amazon.com", "Amazon.ca")
+    assert settings.data_dir == cfg.PROJECT_ROOT / "data" / "us"            # own folders by default
+    assert settings.log_dir == cfg.PROJECT_ROOT / "logs" / "us"
+    assert settings.session_file == cfg.PROJECT_ROOT / "data" / "browser" / "session.json"  # shared login
+    assert not cfg.staging_configured()                                       # US never touches UK staging
+
+
+def test_unknown_profile_is_a_configuration_error(monkeypatch):
+    import os
+    from app import config as cfg
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    with pytest.raises(cfg.ConfigurationError, match="XX_SELLERBOARD_ACCOUNT"):
+        cfg.load_settings(profile="xx")

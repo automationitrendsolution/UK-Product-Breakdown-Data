@@ -35,8 +35,21 @@ ConfigError = ConfigurationError
 
 
 def load_env(path: Path | None = None) -> None:
-    """Load .env without overriding variables already set in the shell."""
-    load_dotenv(path or PROJECT_ROOT / ".env", override=False)
+    """Load settings without overriding variables already set in the shell.
+
+    With a profile file (``--env-file .env.us``) the profile is read first and the
+    project's .env fills in everything it does not set, so shared secrets (Power BI,
+    Sellerboard login) live only in .env. Precedence: shell > profile > .env.
+    """
+    if path is not None:
+        load_dotenv(path, override=False)
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+
+def _project_path(value: str) -> Path:
+    """A path setting; relative paths are taken from the project folder, not the current one."""
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -68,6 +81,8 @@ class Settings:
     login_email: str | None = field(default=None, repr=False)
     login_password: str | None = field(default=None, repr=False)
     update_existing: bool = False
+    account: str | None = None  # Sellerboard account to export; default: "account" in config/selectors.json
+    shared_session_file: Path | None = None  # one Sellerboard login shared by several profiles
 
     @property
     def incoming_dir(self) -> Path:
@@ -87,7 +102,7 @@ class Settings:
 
     @property
     def session_file(self) -> Path:
-        return self.data_dir / "browser" / "session.json"
+        return self.shared_session_file or self.data_dir / "browser" / "session.json"
 
     @property
     def chrome_profile_dir(self) -> Path:
@@ -103,11 +118,43 @@ class Settings:
             path.mkdir(parents=True, exist_ok=True)
 
 
-def load_settings(env_file: Path | None = None) -> Settings:
+PROFILE_KEYS = ("SELLERBOARD_", "POWERBI_", "LOG_LEVEL")
+
+
+def apply_profile(profile: str) -> None:
+    """Use a second Sellerboard account from the same .env.
+
+    Every ``<PROFILE>_SELLERBOARD_*`` / ``<PROFILE>_POWERBI_*`` line (for example
+    ``US_POWERBI_DB_TABLE``) replaces the unprefixed setting for this run; everything
+    else (passwords, Sellerboard login) is shared. Unless the .env says otherwise a
+    profile gets its own data/<profile>/ and logs/<profile>/ folders, reuses the
+    default profile's Sellerboard session, and never uses the staging database.
+    """
+    name = profile.strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9]*", name):
+        raise ConfigurationError(f"profile {profile!r} must be letters and digits, e.g. 'us'")
+    prefix = name.upper() + "_"
+    found = {key[len(prefix):]: value for key, value in os.environ.items()
+             if key.startswith(prefix) and key[len(prefix):].startswith(PROFILE_KEYS)}
+    if "SELLERBOARD_ACCOUNT" not in found or "POWERBI_DB_TABLE" not in found:
+        raise ConfigurationError(f"profile {name!r}: set {prefix}SELLERBOARD_ACCOUNT and {prefix}POWERBI_DB_TABLE "
+                                 "in .env (see .env.example)")
+    defaults = {
+        "SELLERBOARD_DATA_DIR": f"data/{name}",
+        "SELLERBOARD_LOG_DIR": f"logs/{name}",
+        "SELLERBOARD_SESSION_FILE": "data/browser/session.json",
+        "SELLERBOARD_STAGING": "off",
+    }
+    os.environ.update({**defaults, **found})
+
+
+def load_settings(env_file: Path | None = None, profile: str | None = None) -> Settings:
     load_env(env_file)
+    if profile:
+        apply_profile(profile)
     return Settings(
-        data_dir=Path(_env("SELLERBOARD_DATA_DIR", str(PROJECT_ROOT / "data"))),
-        log_dir=Path(_env("SELLERBOARD_LOG_DIR", str(PROJECT_ROOT / "logs"))),
+        data_dir=_project_path(_env("SELLERBOARD_DATA_DIR", str(PROJECT_ROOT / "data"))),
+        log_dir=_project_path(_env("SELLERBOARD_LOG_DIR", str(PROJECT_ROOT / "logs"))),
         log_level=_env("LOG_LEVEL", "INFO").upper(),
         file_pattern=_env("SELLERBOARD_FILE_PATTERN", DEFAULT_FILE_PATTERN),
         marketplaces=allowed_marketplaces(),
@@ -116,6 +163,8 @@ def load_settings(env_file: Path | None = None) -> Settings:
         login_email=_env("SELLERBOARD_LOGIN_EMAIL"),
         login_password=_env("SELLERBOARD_LOGIN_PASSWORD"),
         update_existing=(_env("SELLERBOARD_UPDATE_EXISTING", "false") or "").lower() in ("1", "true", "yes", "on"),
+        account=_env("SELLERBOARD_ACCOUNT"),
+        shared_session_file=_project_path(_env("SELLERBOARD_SESSION_FILE")) if _env("SELLERBOARD_SESSION_FILE") else None,
     )
 
 
@@ -158,8 +207,11 @@ def _db_config(label: str, prefix: str, defaults: dict[str, str]) -> DbConfig:
 
 
 def staging_configured() -> bool:
-    """Whether a staging database is set up. Without one (no SELLERBOARD_DB_USER /
-    SELLERBOARD_DB_PASSWORD), checked exports go straight to Power BI."""
+    """Whether a staging database is used. Without one (no SELLERBOARD_DB_USER /
+    SELLERBOARD_DB_PASSWORD, or SELLERBOARD_STAGING=off), checked exports go straight
+    to Power BI."""
+    if (_env("SELLERBOARD_STAGING", "on") or "").lower() in ("off", "none", "false", "0", "no"):
+        return False
     return bool(_env("SELLERBOARD_DB_USER") and _env("SELLERBOARD_DB_PASSWORD"))
 
 

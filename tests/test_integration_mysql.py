@@ -18,7 +18,7 @@ import pymysql
 import pytest
 
 import run
-from app import config, staging
+from app import config, schema, staging
 from app.sync import MySQLDestination
 from tests.conftest import EXPORT_NAME, REAL_HEADERS, prod_table_ddl, sample_row, write_workbook
 
@@ -350,3 +350,35 @@ def test_daily_update_refreshes_changed_rows_in_place_and_deletes_nothing(direct
     shutil.copy2(project_dirs / "processed" / EXPORT_NAME, incoming / EXPORT_NAME)
     assert run.main(["--no-fetch", *SCOPE]) == 0                    # the next day: nothing left to change
     assert {r["SKU"]: r for r in direct.dest_rows()} == after
+
+
+US_FLOAT = {"SalesOrganic", "SalesPPC", "SalesSponsoredProducts", "SponsoredProducts", "Commission", "EstimatedPayout",
+            "ProductCost Sales", "GrossProfit", "NetProfit", "Margin", "Real ACOS", "UnitsOrganic", "UnitsPPC",
+            "UnitsSponsoredProducts", "Refunds", "PromoValue", "SponsoredDisplay", "SB", "SponsoredBrandsVideo",
+            "Refund Commission", "Refund Principal", "Refund Promotion", "Refund RefundCommission",
+            "Value of returned items", "COMPENSATED_CLAWBACK", "FBAPerUnitFulfillmentFee",
+            "ProductCost MissingFromInbound", "Sessions", "Unit Session Percentage"}
+
+
+def test_us_profile_writes_into_a_us_shaped_table(direct, project_dirs, monkeypatch):
+    """Sellerboard_breakdown_data_2024 types (2026-10-23): units/Sessions/SB are FLOAT there, VAT is TEXT."""
+    columns = ["`Date` datetime NULL"] + [
+        f"`{name}` {'float' if name in US_FLOAT else 'text'} NULL"
+        for name in schema.DESTINATION_COLUMN_MAP.values() if name != "Date"] + ["`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY"]
+    pbi_user = os.environ["POWERBI_DB_USER"]
+    with direct.root.cursor() as cur:
+        cur.execute(f"CREATE TABLE `{direct.database}`.`Sellerboard_breakdown_data_2024` ({', '.join(columns)})")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON `{direct.database}`.`Sellerboard_breakdown_data_2024` TO %s@'%%'", (pbi_user,))
+    monkeypatch.setenv("POWERBI_DB_TABLE", "Sellerboard_breakdown_data_2024")
+    monkeypatch.setenv("SELLERBOARD_ALLOWED_MARKETPLACES", "Amazon.com,Amazon.ca,Amazon.com.mx,Non-Amazon")
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    write_workbook(incoming / EXPORT_NAME, [sample_row(Marketplace="Amazon.com", SKU="US-1"),
+                                            sample_row(Marketplace="Amazon.co.uk", SKU="UK-1")])   # not a US marketplace
+    assert run.main(["--no-fetch", *SCOPE]) == 0
+    rows = direct.query(f"SELECT * FROM `{direct.database}`.`Sellerboard_breakdown_data_2024`")
+    assert [r["SKU"] for r in rows] == ["US-1"]
+    us = rows[0]
+    assert (us["Marketplace"], us["UnitsOrganic"], us["Sessions"], us["VAT"]) == ("Amazon.com", 8.0, 26.0, "-42.5")
+    assert abs(us["SB"] + 0.52) < 1e-6 and abs(us["SalesOrganic"] - 142.42) < 0.005
+    assert direct.dest_rows() == []  # the UK table is untouched

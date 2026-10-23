@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
-"""Sellerboard UK breakdown -- command-line entry point.
+"""Sellerboard breakdown -- command-line entry point for both Sellerboard accounts.
 
-Downloads Sellerboard's "Dashboard by product" export for the last 4 full days
-with Playwright (reusing a session a person signed in to once), imports it -- and
-any export placed in ``data/incoming/`` by hand -- into the local MySQL staging
-database, then inserts the rows Power BI does not have yet into
-powerbidb.Uk_breakdown_data. Existing Power BI rows are never changed or deleted.
+    python run.py --uk-amazon     Uk-AMZ            -> powerbidb.Uk_breakdown_data (the default)
+    python run.py --us-premium    premiumcarproduct -> powerbidb.Sellerboard_breakdown_data_2024
+
+Each run downloads Sellerboard's "Dashboard by product" export (detailed breakdown,
+last 4 full days) with Playwright, reusing a saved Sellerboard session.
+
+* UK (app/importer.py): checks the file, then inserts the rows Power BI does not
+  have yet and, with SELLERBOARD_UPDATE_EXISTING=true, updates changed rows in
+  place. Nothing is ever deleted.
+* US (app/us_upload.py): the file's days replace the same days and marketplaces in
+  Power BI, delete + insert in one transaction (the corrected sellerboard_upload.py).
 
 Running under cron
 ------------------
-Cron calls ``uv run --no-sync python run.py --quiet`` daily at 13:00 from
-the project directory (see ``deploy/crontab.example``). Overlapping runs are
-refused by an internal lock (exit 11). A missed run is caught up by the next one.
+Cron calls ``uv run --no-sync python run.py --uk-amazon --quiet`` and, 30 minutes
+later, ``... --us-premium --quiet`` from the project directory (see
+``deploy/crontab.example``). Overlapping runs are refused by an internal lock
+(exit 11). A missed run is caught up by the next one.
 
 Exit codes
 ----------
@@ -36,7 +43,7 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # no __pycache__ folders in the project; set before app/ is imported
 
-from app import __version__, sellerboard
+from app import __version__, sellerboard, us_upload
 from app.config import load_settings
 from app.exceptions import ConfigurationError, PipelineError, SignInNeeded
 from app.importer import Importer
@@ -45,7 +52,10 @@ from app.schedule import report_window
 
 _HELP_EPILOG = """
 examples:
-  python run.py                     download the last 4 full days, import, sync to Power BI (cron)
+  python run.py --uk-amazon         UK: download the last 4 full days, check, insert/update Uk_breakdown_data (cron)
+  python run.py --us-premium        US: download the last 4 full days, replace them in Sellerboard_breakdown_data_2024 (cron)
+  python run.py --us-premium --dry-run    US: show what would be replaced; writes nothing
+  python run.py --us-premium --no-fetch   US: upload what is already in data/us/incoming/
   python run.py --login             one-time Sellerboard sign-in (Chrome window, or the terminal on a server)
   python run.py --login --terminal  sign in in the terminal with SELLERBOARD_LOGIN_EMAIL/PASSWORD from .env
   python run.py --fetch-only        download the export into data/incoming/ only
@@ -74,12 +84,17 @@ def _date(value: str) -> dt.date:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sellerboard-import",
-        description="Download Sellerboard 'Dashboard by product' exports, stage them in MySQL and "
-                    "insert new rows into powerbidb.Uk_breakdown_data.",
+        description="Download Sellerboard 'Dashboard by product' exports and store them in Power BI: "
+                    "--uk-amazon -> Uk_breakdown_data, --us-premium -> Sellerboard_breakdown_data_2024.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_HELP_EPILOG,
     )
     parser.add_argument("--version", action="version", version=f"sellerboard-import {__version__}")
+    account = parser.add_mutually_exclusive_group()
+    account.add_argument("--uk-amazon", action="store_true",
+                         help="Account Uk-AMZ -> Uk_breakdown_data (the default when no account is given).")
+    account.add_argument("--us-premium", action="store_true",
+                         help="Account premiumcarproduct -> Sellerboard_breakdown_data_2024 (US_* lines in .env).")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--file", type=Path, metavar="PATH", action="append",
                        help="Import this file in place (repeatable); it is not moved. Nothing is downloaded.")
@@ -98,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Do not send to Power BI this run (a later run still sends the batch).")
     parser.add_argument("--local-only", action="store_true",
                         help="Import into the local database and mark the batch so it is never sent to Power BI.")
-    parser.add_argument("--start-date", type=_date, help="First report day (default: the 3-day window).")
+    parser.add_argument("--start-date", type=_date, help="First report day (default: the last N full days).")
     parser.add_argument("--end-date", type=_date, help="Last report day (default: yesterday).")
     parser.add_argument("--headed", action="store_true", help="Show the browser window (debugging).")
     parser.add_argument("--terminal", action="store_true",
@@ -126,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--end-date is before --start-date")
     started = dt.datetime.now()
     try:
-        settings = load_settings(args.env_file)
+        settings = load_settings(args.env_file, "us" if args.us_premium else None)
     except ConfigurationError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return exc.exit_code
@@ -164,6 +179,26 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
         print(f"Screenshot: {shot}\nControls:   {controls}")
         return 0, "inspected"
 
+    def download(start: dt.date, end: dt.date) -> Path:
+        """Sellerboard export; if the saved session has expired, sign in once with .env and retry."""
+        try:
+            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
+        except SignInNeeded:
+            if not (settings.login_email and settings.login_password):
+                raise
+            logger.warning("Sellerboard session missing or expired: signing in with the .env credentials")
+            sellerboard.credential_login(settings, automatic=True)
+            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
+
+    if args.us_premium:
+        unsupported = [flag for flag, used in (("--file", args.file), ("--preview", args.preview),
+                                               ("--no-sync", args.no_sync), ("--local-only", args.local_only),
+                                               ("--update-existing", args.update_existing)) if used]
+        if unsupported:
+            logger.error("%s cannot be used with --us-premium", ", ".join(unsupported))
+            return 2, "unsupported option"
+        return us_upload.run(args, settings, download)
+
     files = None
     if args.file:
         files = [f.expanduser().resolve() for f in args.file]
@@ -183,14 +218,7 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
             start, end = report_window(dt.date.today(), settings.window_days, importer.last_synced_end(),
                                        settings.max_catchup_days)
         logger.info("downloading Sellerboard 'Dashboard by product' %s..%s", start, end)
-        try:
-            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
-        except SignInNeeded:
-            if not (settings.login_email and settings.login_password):
-                raise
-            logger.warning("Sellerboard session missing or expired: signing in with the .env credentials")
-            sellerboard.credential_login(settings, automatic=True)
-            return sellerboard.fetch_report(settings, start, end, headless=not args.headed)
+        return download(start, end)
 
     wants_fetch = not (args.no_fetch or args.dry_run or args.preview or files)
     summary = importer.run(files, fetch=fetch if wants_fetch else None, start=args.start_date,
