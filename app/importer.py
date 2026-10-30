@@ -46,14 +46,15 @@ class RunSummary:
         return f"files: {files} | rows staged: {self.rows_staged} | power bi: {synced}"
 
 
-def scope_for(path: Path, start: dt.date | None, end: dt.date | None, today: dt.date) -> tuple[dt.date, dt.date]:
-    yesterday = today - dt.timedelta(days=1)
+def scope_for(path: Path, start: dt.date | None, end: dt.date | None, today: dt.date,
+              include_today: bool = False) -> tuple[dt.date, dt.date]:
+    last = today if include_today else today - dt.timedelta(days=1)
     if start and end:
         return start, end
     period = excel.filename_period(path.name)
     if period:
-        return start or period[0], end or min(period[1], yesterday)
-    return start or EARLIEST, end or yesterday
+        return start or period[0], end or min(period[1], last)
+    return start or EARLIEST, end or last
 
 
 class Importer:
@@ -65,7 +66,8 @@ class Importer:
         self.sync = sync and not dry_run
         self.preview = preview
         self.local_only = local_only
-        self.update_existing = update_existing
+        # Today's rows change all day: storing them only makes sense if later runs update them.
+        self.update_existing = update_existing or settings.include_today
         self.use_lock = use_lock
         self.direct = not config.staging_configured()
 
@@ -136,7 +138,7 @@ class Importer:
         log.info("moved %s to %s/", path.name, folder.name)
 
     def _import_file(self, path: Path, start, end, *, move: bool, summary: RunSummary) -> None:
-        scope_start, scope_end = scope_for(path, start, end, dt.date.today())
+        scope_start, scope_end = scope_for(path, start, end, dt.date.today(), self.settings.include_today)
         try:
             plan = excel.build_plan([path], scope_start, scope_end, self.settings.marketplaces,
                                     path.parent, path.name)

@@ -86,6 +86,9 @@ Sellerboard login are shared, and the US job has its own `data/us/` and `logs/us
   marketplaces in Power BI, delete + insert in one transaction checked before the commit. Summary exports (no fee /
   COGS breakdown) are refused, today's partial day is left out, and the Excel is kept in `data/us/processed/`.
 
+With `SELLERBOARD_INCLUDE_TODAY=true` both jobs also store today's numbers and every run refreshes them
+(for UK this switches on updating existing rows); use it with frequent runs, e.g. every 30 minutes.
+
 Run the two accounts at least 30 minutes apart (see `deploy/crontab.example`): both use one Sellerboard login and
 switch its account.
 

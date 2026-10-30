@@ -81,6 +81,7 @@ class Settings:
     login_email: str | None = field(default=None, repr=False)
     login_password: str | None = field(default=None, repr=False)
     update_existing: bool = False
+    include_today: bool = False  # also download/store today's (still changing) numbers
     account: str | None = None  # Sellerboard account to export; default: "account" in config/selectors.json
     shared_session_file: Path | None = None  # one Sellerboard login shared by several profiles
 
@@ -163,6 +164,7 @@ def load_settings(env_file: Path | None = None, profile: str | None = None) -> S
         login_email=_env("SELLERBOARD_LOGIN_EMAIL"),
         login_password=_env("SELLERBOARD_LOGIN_PASSWORD"),
         update_existing=(_env("SELLERBOARD_UPDATE_EXISTING", "false") or "").lower() in ("1", "true", "yes", "on"),
+        include_today=(_env("SELLERBOARD_INCLUDE_TODAY", "false") or "").lower() in ("1", "true", "yes", "on"),
         account=_env("SELLERBOARD_ACCOUNT"),
         shared_session_file=_project_path(_env("SELLERBOARD_SESSION_FILE")) if _env("SELLERBOARD_SESSION_FILE") else None,
     )

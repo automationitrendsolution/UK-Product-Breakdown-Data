@@ -382,3 +382,20 @@ def test_us_profile_writes_into_a_us_shaped_table(direct, project_dirs, monkeypa
     assert (us["Marketplace"], us["UnitsOrganic"], us["Sessions"], us["VAT"]) == ("Amazon.com", 8.0, 26.0, "-42.5")
     assert abs(us["SB"] + 0.52) < 1e-6 and abs(us["SalesOrganic"] - 142.42) < 0.005
     assert direct.dest_rows() == []  # the UK table is untouched
+
+
+def test_uk_include_today_inserts_and_keeps_todays_rows_current(direct, project_dirs, monkeypatch):
+    monkeypatch.setenv("SELLERBOARD_INCLUDE_TODAY", "true")
+    monkeypatch.delenv("SELLERBOARD_UPDATE_EXISTING", raising=False)   # implied by INCLUDE_TODAY
+    today = dt.date.today()
+    name = f"Econour_Dashboard_by_product_{today:%d_%m_%Y}-{today:%d_%m_%Y}_(1)_sellerboard.com.xlsx"
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    write_workbook(incoming / name, [sample_row(SKU="TODAY", Date=today.strftime("%d/%m/%Y"))])
+    assert run.main(["--uk-amazon", "--no-fetch"]) == 0
+    (first,) = direct.dest_rows()
+    assert first["Date"].date() == today and abs(first["SalesOrganic"] - 142.42) < 0.005
+    write_workbook(incoming / name, [sample_row(SKU="TODAY", Date=today.strftime("%d/%m/%Y"), SalesOrganic=200.0)])
+    assert run.main(["--uk-amazon", "--no-fetch"]) == 0
+    (second,) = direct.dest_rows()
+    assert second["id"] == first["id"] and abs(second["SalesOrganic"] - 200.0) < 0.005   # updated in place

@@ -261,3 +261,10 @@ def test_unknown_profile_is_a_configuration_error(monkeypatch):
     monkeypatch.setattr(os, "environ", dict(os.environ))
     with pytest.raises(cfg.ConfigurationError, match="XX_SELLERBOARD_ACCOUNT"):
         cfg.load_settings(profile="xx")
+
+
+def test_scope_includes_today_only_when_asked():
+    from app.importer import scope_for
+    today = dt.date(2026, 10, 16)                            # EXPORT_NAME covers 12..17 Oct
+    assert scope_for(Path(EXPORT_NAME), None, None, today)[1] == dt.date(2026, 10, 15)
+    assert scope_for(Path(EXPORT_NAME), None, None, today, include_today=True)[1] == dt.date(2026, 10, 16)

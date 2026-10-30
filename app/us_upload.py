@@ -39,8 +39,9 @@ INSERT_CHUNK = 500
 log = get_logger("us_upload")
 
 
-def read_file(path: Path, allowed: tuple[str, ...], today: dt.date) -> pd.DataFrame:
-    """The rows to upload: full days only, allowed marketplaces only, detailed export only."""
+def read_file(path: Path, allowed: tuple[str, ...], today: dt.date, include_today: bool = False) -> pd.DataFrame:
+    """The rows to upload: allowed marketplaces only, detailed export only, and full days
+    only unless ``include_today`` (today's rows are then replaced again on every run)."""
     df = pd.read_excel(path)
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
@@ -52,10 +53,11 @@ def read_file(path: Path, allowed: tuple[str, ...], today: dt.date) -> pd.DataFr
         df["Date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y")
     except ValueError as exc:
         raise MalformedReport(f"{path.name}: a Date is not dd/mm/yyyy ({exc})") from None
-    partial = int((df["Date"].dt.date >= today).sum())
+    cut = today + dt.timedelta(days=1) if include_today else today
+    partial = int((df["Date"].dt.date >= cut).sum())
     if partial:
-        log.info("%s: left out %d rows of today's incomplete day", path.name, partial)
-    df = df[df["Date"].dt.date < today]
+        log.info("%s: left out %d rows dated %s or later", path.name, partial, cut)
+    df = df[df["Date"].dt.date < cut]
     other = df[~df["Marketplace"].isin(allowed)]
     if len(other):
         log.warning("%s: left out %d rows of other marketplaces: %s", path.name, len(other),
@@ -157,8 +159,12 @@ def run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path]) 
 def _run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path]) -> tuple[int, str]:
     today = dt.date.today()
     if not (args.no_fetch or args.dry_run):
-        start, end = (args.start_date, args.end_date) if args.start_date and args.end_date else \
-            report_window(today, settings.window_days)
+        if args.start_date and args.end_date:
+            start, end = args.start_date, args.end_date
+        else:
+            start, end = report_window(today, settings.window_days)
+            if settings.include_today:
+                end = today
         log.info("downloading premiumcarproduct 'Dashboard by product' %s..%s", start, end)
         download(start, end)
     if args.fetch_only:
@@ -174,7 +180,7 @@ def _run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path])
     try:
         for path in files:
             try:
-                df = read_file(path, settings.marketplaces, today)
+                df = read_file(path, settings.marketplaces, today, settings.include_today)
                 deleted, inserted = replace_days(conn, table, df, dry_run=args.dry_run)
             except MalformedReport as exc:
                 log.error("%s", exc)

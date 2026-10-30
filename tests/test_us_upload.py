@@ -114,3 +114,17 @@ def test_failure_halfway_rolls_everything_back(us, monkeypatch):
 def test_us_premium_refuses_uk_only_options(us):
     assert run.main(["--us-premium", "--preview"]) == 2
     assert run.main(["--us-premium", "--local-only", "--no-fetch"]) == 2
+
+
+def test_include_today_stores_and_then_replaces_todays_rows(us):
+    incoming, seed, rows = us
+    os.environ["SELLERBOARD_INCLUDE_TODAY"] = "true"        # the fixture's os.environ is a throwaway copy
+    today = dt.date.today()
+    name = f"EcoNour_Dashboard_by_product_{today:%d_%m_%Y}-{today:%d_%m_%Y}_(1)_sellerboard.com.xlsx"
+    write_workbook(incoming / name, [sample_row(Marketplace="Amazon.com", SKU="TODAY", Date=today.strftime("%d/%m/%Y"))])
+    assert run.main(["--us-premium", "--no-fetch"]) == 0
+    assert [(r["SKU"], r["SalesOrganic"]) for r in rows()] == [("TODAY", pytest.approx(142.42))]
+    write_workbook(incoming / name, [sample_row(Marketplace="Amazon.com", SKU="TODAY", Date=today.strftime("%d/%m/%Y"),
+                                                SalesOrganic=200.0)])                  # later the same day
+    assert run.main(["--us-premium", "--no-fetch"]) == 0
+    assert [(r["SKU"], r["SalesOrganic"]) for r in rows()] == [("TODAY", pytest.approx(200.0))]
