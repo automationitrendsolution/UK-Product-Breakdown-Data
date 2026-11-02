@@ -179,10 +179,13 @@ def test_missing_dates_are_reported(tmp_path):
 
 
 def test_fingerprint_depends_on_files_and_scope(tmp_path):
-    a = plan_for(tmp_path, [sample_row()])
-    b = plan_for(tmp_path, [sample_row()])
-    c = plan_for(tmp_path, [sample_row()], end=D(2026, 10, 16))
-    assert a.fingerprint() == b.fingerprint() != c.fingerprint()
+    # One file read three times: an .xlsx stores its save time, so two writes can differ by a second.
+    path = write_workbook(tmp_path / EXPORT_NAME, [sample_row()])
+
+    def plan(end):
+        return excel.build_plan([path], D(2026, 10, 12), end, config.DEFAULT_MARKETPLACES, tmp_path, "*.xlsx")
+
+    assert plan(D(2026, 10, 15)).fingerprint() == plan(D(2026, 10, 15)).fingerprint() != plan(D(2026, 10, 16)).fingerprint()
 
 
 def test_source_file_is_never_modified_or_deleted(tmp_path):

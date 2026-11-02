@@ -138,6 +138,14 @@ class Importer:
         log.info("moved %s to %s/", path.name, folder.name)
 
     def _import_file(self, path: Path, start, end, *, move: bool, summary: RunSummary) -> None:
+        stale = excel.stale_reason(path, self.settings.max_file_age_hours) if move else None
+        if stale:  # only files waiting in incoming/; --file imports are a deliberate choice
+            log.error("%s", stale)
+            summary.files["failed"] += 1
+            summary.exit_code = max(summary.exit_code, 7)
+            if not self.dry_run:
+                self._move(path, self.settings.failed_dir)
+            return
         scope_start, scope_end = scope_for(path, start, end, dt.date.today(), self.settings.include_today)
         try:
             plan = excel.build_plan([path], scope_start, scope_end, self.settings.marketplaces,

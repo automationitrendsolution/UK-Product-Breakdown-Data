@@ -105,4 +105,7 @@ def project_dirs(tmp_path, monkeypatch):
     # Never the real Sellerboard account: a test must not be able to sign in for real.
     monkeypatch.setenv("SELLERBOARD_LOGIN_EMAIL", "")
     monkeypatch.setenv("SELLERBOARD_LOGIN_PASSWORD", "")
+    # Behaviour switches from the real .env must not change what a test sees; tests that need them set them.
+    monkeypatch.setenv("SELLERBOARD_INCLUDE_TODAY", "false")
+    monkeypatch.setenv("SELLERBOARD_UPDATE_EXISTING", "false")
     return data

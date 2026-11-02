@@ -69,6 +69,16 @@ def _int(name: str, default: int) -> int:
     return value
 
 
+def _hours(name: str, default: int) -> int:
+    try:
+        value = int(_env(name, str(default)))
+    except ValueError:
+        raise ConfigurationError(f"{name} must be a whole number of hours (0 = no limit)") from None
+    if value < 0:
+        raise ConfigurationError(f"{name} must be 0 or more")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -82,6 +92,7 @@ class Settings:
     login_password: str | None = field(default=None, repr=False)
     update_existing: bool = False
     include_today: bool = False  # also download/store today's (still changing) numbers
+    max_file_age_hours: int = 24  # older exports in incoming/ are refused (0 = no limit)
     account: str | None = None  # Sellerboard account to export; default: "account" in config/selectors.json
     shared_session_file: Path | None = None  # one Sellerboard login shared by several profiles
 
@@ -165,6 +176,7 @@ def load_settings(env_file: Path | None = None, profile: str | None = None) -> S
         login_password=_env("SELLERBOARD_LOGIN_PASSWORD"),
         update_existing=(_env("SELLERBOARD_UPDATE_EXISTING", "false") or "").lower() in ("1", "true", "yes", "on"),
         include_today=(_env("SELLERBOARD_INCLUDE_TODAY", "false") or "").lower() in ("1", "true", "yes", "on"),
+        max_file_age_hours=_hours("SELLERBOARD_MAX_FILE_AGE_HOURS", 24),
         account=_env("SELLERBOARD_ACCOUNT"),
         shared_session_file=_project_path(_env("SELLERBOARD_SESSION_FILE")) if _env("SELLERBOARD_SESSION_FILE") else None,
     )
@@ -179,7 +191,7 @@ class DbConfig:
     user: str
     password: str = field(repr=False)
     ssl_ca: str | None = None
-    connect_timeout: int = 10
+    connect_timeout: int = 30
     read_timeout: int = 120
 
     def describe(self) -> str:

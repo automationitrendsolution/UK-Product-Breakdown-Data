@@ -268,3 +268,42 @@ def test_scope_includes_today_only_when_asked():
     today = dt.date(2026, 10, 16)                            # EXPORT_NAME covers 12..17 Oct
     assert scope_for(Path(EXPORT_NAME), None, None, today)[1] == dt.date(2026, 10, 15)
     assert scope_for(Path(EXPORT_NAME), None, None, today, include_today=True)[1] == dt.date(2026, 10, 16)
+
+
+def test_connection_timeout_is_retried_but_refused_fails_at_once(monkeypatch):
+    from app import config as cfg
+    attempts, sleeps = [], []
+    monkeypatch.setattr(db.time, "sleep", sleeps.append)
+
+    def timing_out(**kwargs):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise pymysql.err.OperationalError(2003, "Can't connect (_ssl.c:1015: The handshake operation timed out)")
+        return "connection"
+
+    monkeypatch.setattr(db.pymysql, "connect", timing_out)
+    conf = cfg.DbConfig("Power BI database", "h", 3306, "d", "u", "p")
+    assert db.connect(conf) == "connection" and len(attempts) == 3 and sleeps == [5, 15]
+
+    attempts.clear()
+
+    def refused(**kwargs):
+        attempts.append(1)
+        raise pymysql.err.OperationalError(2003, "Can't connect to MySQL server (Connection refused)")
+
+    monkeypatch.setattr(db.pymysql, "connect", refused)
+    with pytest.raises(db.DatabaseUnavailable):
+        db.connect(conf)
+    assert len(attempts) == 1   # no retry: a refused connection is not a blip
+
+
+def test_uk_refuses_an_old_export_waiting_in_incoming(project_dirs, local_env, no_database):
+    import os
+    import time
+    incoming = project_dirs / "incoming"
+    incoming.mkdir(parents=True)
+    old = write_workbook(incoming / EXPORT_NAME, [sample_row()])
+    three_days_ago = time.time() - 3 * 86400
+    os.utime(old, (three_days_ago, three_days_ago))
+    assert run.main(["--uk-amazon", "--no-fetch", "--no-sync", *SCOPE]) == 7   # refused before any database is touched
+    assert not old.exists() and (project_dirs / "failed" / EXPORT_NAME).exists()

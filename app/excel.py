@@ -272,6 +272,22 @@ def find_input_files(input_dir: Path, pattern: str) -> list[Path]:
     )
 
 
+def stale_reason(path: Path, max_age_hours: int) -> str | None:
+    """Why an export waiting in incoming/ is too old to upload, or None.
+
+    An old export holds old numbers; uploading it would put them back over newer
+    ones (the US job replaces days, the UK job updates rows). 0 = no limit.
+    """
+    if max_age_hours <= 0:
+        return None
+    age = dt.datetime.now() - dt.datetime.fromtimestamp(path.stat().st_mtime)
+    if age <= dt.timedelta(hours=max_age_hours):
+        return None
+    return (f"{path.name}: downloaded {age.days} day(s) {age.seconds // 3600} h ago, older than "
+            f"{max_age_hours} h -- not uploaded so it cannot overwrite newer numbers (moved to failed/; "
+            "download it again, or set SELLERBOARD_MAX_FILE_AGE_HOURS=0 for a one-off)")
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:

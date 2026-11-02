@@ -128,3 +128,16 @@ def test_include_today_stores_and_then_replaces_todays_rows(us):
                                                 SalesOrganic=200.0)])                  # later the same day
     assert run.main(["--us-premium", "--no-fetch"]) == 0
     assert [(r["SKU"], r["SalesOrganic"]) for r in rows()] == [("TODAY", pytest.approx(200.0))]
+
+
+def test_old_export_never_overwrites_newer_rows(us):
+    import time
+    incoming, seed, rows = us
+    _seed_existing(seed)
+    before = rows()
+    old = write_workbook(incoming / US_EXPORT, [sample_row(Marketplace="Amazon.com", SKU="STALE")])
+    eight_days_ago = time.time() - 8 * 86400
+    os.utime(old, (eight_days_ago, eight_days_ago))
+    assert run.main(["--us-premium", "--no-fetch"]) == 7
+    assert rows() == before, "Power BI must be untouched"
+    assert (incoming.parent / "failed" / US_EXPORT).exists()

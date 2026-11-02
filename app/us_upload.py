@@ -26,6 +26,7 @@ import pandas as pd
 import pymysql
 
 from . import config, db
+from .excel import stale_reason
 from .config import Settings
 from .exceptions import ConfigurationError, DatabaseError, MalformedReport
 from .logging_config import get_logger
@@ -179,6 +180,13 @@ def _run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path])
     worst, done = 0, []
     try:
         for path in files:
+            stale = stale_reason(path, settings.max_file_age_hours)
+            if stale:
+                log.error("%s", stale)
+                worst = max(worst, MalformedReport.exit_code)
+                if not args.dry_run:
+                    _move(path, settings.failed_dir)
+                continue
             try:
                 df = read_file(path, settings.marketplaces, today, settings.include_today)
                 deleted, inserted = replace_days(conn, table, df, dry_run=args.dry_run)
