@@ -6,6 +6,7 @@
   "dashboard_url": "https://app.sellerboard.com/en/dashboard",
   "reports_url": "https://app.sellerboard.com/en/export",
   "download_timeout_seconds": 300,
+  "notices": ["sellerboard MCP update"],
   "export_steps": [
     {"action": "click", "selector": "text=\"Dashboard by product\""},
     {"action": "fill", "selector": "input[name=daterangepicker_start]", "value": "{start:%d/%m/%Y}"},

@@ -272,6 +272,35 @@ def _screenshot(page, settings: Settings, name: str) -> Path:
     return path
 
 
+# Closes the floating box around the notice text: its close control when there is one,
+# then hides the box anyway, so it can no longer cover the export form.
+_CLOSE_NOTICE_JS = """(text) => {
+    const hits = [...document.querySelectorAll('body *')].filter(e => (e.innerText || '').includes(text));
+    const hit = hits[hits.length - 1];
+    if (!hit) return 'gone';
+    let box = hit;
+    while (box.parentElement && box.parentElement !== document.body
+           && !['fixed', 'absolute', 'sticky'].includes(getComputedStyle(box).position)) box = box.parentElement;
+    const close = [...box.querySelectorAll('[aria-label*="close" i], [class*="close" i], [data-dismiss], [data-bs-dismiss], button, a')]
+        .find(e => /close|dismiss/i.test(e.getAttribute('aria-label') || '') || /close/i.test(String(e.className))
+                   || e.hasAttribute('data-dismiss') || e.hasAttribute('data-bs-dismiss')
+                   || /^(×|✕|x|close|got it|ok|dismiss)$/i.test((e.innerText || '').trim()));
+    if (close) close.click();
+    box.style.setProperty('display', 'none', 'important');
+    document.querySelectorAll('.modal-backdrop').forEach(e => e.remove());
+    return close ? 'closed' : 'hidden';
+}"""
+
+
+def _close_notices(page, selectors: dict) -> None:
+    """Sellerboard announcements (e.g. "sellerboard MCP update") float over the page and
+    swallow clicks; close any listed in selectors.json whenever one shows up."""
+    for text in selectors.get("notices", []):
+        def close(_, text=text):
+            log.info("closed Sellerboard notice %r (%s)", text, page.evaluate(_CLOSE_NOTICE_JS, text))
+        page.add_locator_handler(page.get_by_text(text).first, close, no_wait_after=True)
+
+
 def _template_values(start: dt.date, end: dt.date) -> dict:
     # The export form keeps the range as UTC-midnight timestamps of the From and To days.
     return {"start": start, "end": end, "start_ts": calendar.timegm(start.timetuple()),
@@ -347,6 +376,7 @@ def fetch_report(settings: Settings, start: dt.date, end: dt.date, *, headless: 
     with sync_playwright() as p:
         browser, context = _open(p, settings, headless)
         page = context.new_page()
+        _close_notices(page, selectors)
         try:
             _goto(page, selectors["reports_url"])
             _ensure_account(page, selectors, settings)
