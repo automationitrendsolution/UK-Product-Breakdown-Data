@@ -265,6 +265,10 @@ def _screenshot(page, settings: Settings, name: str) -> Path:
         page.screenshot(path=str(path), full_page=True)
     except Exception:
         pass
+    try:  # the visible text says which page it really was (a pop-up, a notice, another account)
+        path.with_suffix(".txt").write_text(f"{page.url}\n\n{page.inner_text('body', timeout=5_000)}", encoding="utf-8")
+    except Exception:
+        pass
     return path
 
 
@@ -351,7 +355,7 @@ def fetch_report(settings: Settings, start: dt.date, end: dt.date, *, headless: 
                     _run_step(page, step, values, number)
                 except PlaywrightTimeout:
                     shot = _screenshot(page, settings, "page-changed")
-                    raise PageChanged(f"export step {number} ({step['selector']}) not found; see {shot}") from None
+                    raise PageChanged(f"export step {number} ({step['selector']}) not found at {page.url}; see {shot}") from None
                 except PageChanged as exc:
                     shot = _screenshot(page, settings, "page-changed")
                     raise PageChanged(f"{exc}; see {shot}") from None

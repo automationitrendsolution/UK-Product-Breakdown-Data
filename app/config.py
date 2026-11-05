@@ -9,10 +9,12 @@ Error messages name variables, never their values.
 """
 from __future__ import annotations
 
+import datetime as dt
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -69,6 +71,14 @@ def _int(name: str, default: int) -> int:
     return value
 
 
+def _timezone(name: str) -> str:
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ConfigurationError(f"SELLERBOARD_TIMEZONE={name!r} is not a time zone (e.g. Asia/Kolkata)") from None
+    return name
+
+
 def _hours(name: str, default: int) -> int:
     try:
         value = int(_env(name, str(default)))
@@ -93,8 +103,14 @@ class Settings:
     update_existing: bool = False
     include_today: bool = False  # also download/store today's (still changing) numbers
     max_file_age_hours: int = 24  # older exports in incoming/ are refused (0 = no limit)
+    timezone: str = "Asia/Kolkata"  # where "today" is decided; the server's own clock may differ
     account: str | None = None  # Sellerboard account to export; default: "account" in config/selectors.json
     shared_session_file: Path | None = None  # one Sellerboard login shared by several profiles
+
+    def today(self) -> dt.date:
+        """Today's date in SELLERBOARD_TIMEZONE. India is ahead of the UK and US accounts,
+        so a window ending "today" here always includes each account's current day."""
+        return dt.datetime.now(ZoneInfo(self.timezone)).date()
 
     @property
     def incoming_dir(self) -> Path:
@@ -177,6 +193,7 @@ def load_settings(env_file: Path | None = None, profile: str | None = None) -> S
         update_existing=(_env("SELLERBOARD_UPDATE_EXISTING", "false") or "").lower() in ("1", "true", "yes", "on"),
         include_today=(_env("SELLERBOARD_INCLUDE_TODAY", "false") or "").lower() in ("1", "true", "yes", "on"),
         max_file_age_hours=_hours("SELLERBOARD_MAX_FILE_AGE_HOURS", 24),
+        timezone=_timezone(_env("SELLERBOARD_TIMEZONE", "Asia/Kolkata")),
         account=_env("SELLERBOARD_ACCOUNT"),
         shared_session_file=_project_path(_env("SELLERBOARD_SESSION_FILE")) if _env("SELLERBOARD_SESSION_FILE") else None,
     )

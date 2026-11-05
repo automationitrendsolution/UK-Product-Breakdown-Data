@@ -307,3 +307,14 @@ def test_uk_refuses_an_old_export_waiting_in_incoming(project_dirs, local_env, n
     os.utime(old, (three_days_ago, three_days_ago))
     assert run.main(["--uk-amazon", "--no-fetch", "--no-sync", *SCOPE]) == 7   # refused before any database is touched
     assert not old.exists() and (project_dirs / "failed" / EXPORT_NAME).exists()
+
+
+def test_today_follows_the_configured_time_zone_not_the_machine(monkeypatch):
+    from zoneinfo import ZoneInfo
+    from app import config as cfg
+    for zone in ("Asia/Kolkata", "America/New_York", "Pacific/Kiritimati"):
+        monkeypatch.setenv("SELLERBOARD_TIMEZONE", zone)
+        assert cfg.load_settings().today() == dt.datetime.now(ZoneInfo(zone)).date()
+    monkeypatch.setenv("SELLERBOARD_TIMEZONE", "India/Somewhere")
+    with pytest.raises(cfg.ConfigurationError, match="SELLERBOARD_TIMEZONE"):
+        cfg.load_settings()

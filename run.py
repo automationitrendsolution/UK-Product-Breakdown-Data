@@ -215,10 +215,10 @@ def _run(args: argparse.Namespace, settings, logger) -> tuple[int, str]:
         if args.start_date and args.end_date:
             start, end = args.start_date, args.end_date
         else:
-            start, end = report_window(dt.date.today(), settings.window_days, importer.last_synced_end(),
+            start, end = report_window(settings.today(), settings.window_days, importer.last_synced_end(),
                                        settings.max_catchup_days)
             if settings.include_today:
-                end = dt.date.today()
+                end = settings.today()
         logger.info("downloading Sellerboard 'Dashboard by product' %s..%s", start, end)
         return download(start, end)
 

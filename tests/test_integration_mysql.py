@@ -20,7 +20,7 @@ import pytest
 import run
 from app import config, schema, staging
 from app.sync import MySQLDestination
-from tests.conftest import EXPORT_NAME, REAL_HEADERS, prod_table_ddl, sample_row, write_workbook
+from tests.conftest import EXPORT_NAME, REAL_HEADERS, ist_today, prod_table_ddl, sample_row, write_workbook
 
 pytestmark = pytest.mark.integration
 SCOPE = ["--start-date", "2026-10-12", "--end-date", "2026-10-15"]
@@ -387,7 +387,7 @@ def test_us_profile_writes_into_a_us_shaped_table(direct, project_dirs, monkeypa
 def test_uk_include_today_inserts_and_keeps_todays_rows_current(direct, project_dirs, monkeypatch):
     monkeypatch.setenv("SELLERBOARD_INCLUDE_TODAY", "true")
     monkeypatch.delenv("SELLERBOARD_UPDATE_EXISTING", raising=False)   # implied by INCLUDE_TODAY
-    today = dt.date.today()
+    today = ist_today()
     name = f"Econour_Dashboard_by_product_{today:%d_%m_%Y}-{today:%d_%m_%Y}_(1)_sellerboard.com.xlsx"
     incoming = project_dirs / "incoming"
     incoming.mkdir(parents=True)

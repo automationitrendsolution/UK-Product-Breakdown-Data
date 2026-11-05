@@ -76,6 +76,13 @@ def sample_row(**overrides) -> dict:
     return row
 
 
+def ist_today():
+    """'Today' as the jobs see it (SELLERBOARD_TIMEZONE defaults to Asia/Kolkata)."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    return dt.datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+
 def write_workbook(path: Path, rows: list[dict], headers: list[str] | None = None) -> Path:
     headers = headers or REAL_HEADERS
     book = openpyxl.Workbook()
@@ -108,4 +115,5 @@ def project_dirs(tmp_path, monkeypatch):
     # Behaviour switches from the real .env must not change what a test sees; tests that need them set them.
     monkeypatch.setenv("SELLERBOARD_INCLUDE_TODAY", "false")
     monkeypatch.setenv("SELLERBOARD_UPDATE_EXISTING", "false")
+    monkeypatch.setenv("SELLERBOARD_TIMEZONE", "Asia/Kolkata")
     return data

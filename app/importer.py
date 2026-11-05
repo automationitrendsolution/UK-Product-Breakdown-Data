@@ -146,7 +146,7 @@ class Importer:
             if not self.dry_run:
                 self._move(path, self.settings.failed_dir)
             return
-        scope_start, scope_end = scope_for(path, start, end, dt.date.today(), self.settings.include_today)
+        scope_start, scope_end = scope_for(path, start, end, self.settings.today(), self.settings.include_today)
         try:
             plan = excel.build_plan([path], scope_start, scope_end, self.settings.marketplaces,
                                     path.parent, path.name)

@@ -158,7 +158,7 @@ def run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path]) 
 
 
 def _run(args, settings: Settings, download: Callable[[dt.date, dt.date], Path]) -> tuple[int, str]:
-    today = dt.date.today()
+    today = settings.today()
     if not (args.no_fetch or args.dry_run):
         if args.start_date and args.end_date:
             start, end = args.start_date, args.end_date

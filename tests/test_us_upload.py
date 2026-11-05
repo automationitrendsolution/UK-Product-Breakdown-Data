@@ -10,7 +10,7 @@ import pytest
 import run
 from app import us_upload
 from app import schema
-from tests.conftest import REAL_HEADERS, sample_row, write_workbook
+from tests.conftest import REAL_HEADERS, ist_today, sample_row, write_workbook
 from tests.test_integration_mysql import US_FLOAT, mysql_root, sandbox  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.integration
@@ -58,7 +58,7 @@ def _seed_existing(seed):
 def test_replaces_only_the_files_dates_and_marketplaces(us):
     incoming, seed, rows = us
     _seed_existing(seed)
-    today = dt.date.today().strftime("%d/%m/%Y")
+    today = ist_today().strftime("%d/%m/%Y")
     write_workbook(incoming / US_EXPORT, [
         sample_row(Marketplace="Amazon.com", SKU="NEW-1"),
         sample_row(Marketplace="Amazon.com", SKU="NEW-2"),
@@ -119,7 +119,7 @@ def test_us_premium_refuses_uk_only_options(us):
 def test_include_today_stores_and_then_replaces_todays_rows(us):
     incoming, seed, rows = us
     os.environ["SELLERBOARD_INCLUDE_TODAY"] = "true"        # the fixture's os.environ is a throwaway copy
-    today = dt.date.today()
+    today = ist_today()
     name = f"EcoNour_Dashboard_by_product_{today:%d_%m_%Y}-{today:%d_%m_%Y}_(1)_sellerboard.com.xlsx"
     write_workbook(incoming / name, [sample_row(Marketplace="Amazon.com", SKU="TODAY", Date=today.strftime("%d/%m/%Y"))])
     assert run.main(["--us-premium", "--no-fetch"]) == 0
